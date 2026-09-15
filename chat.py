@@ -1,16 +1,21 @@
+import os
+import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from groq import Groq
 from dotenv import load_dotenv
-import os
 
 load_dotenv()
 
+# =====================================================
+# Logging Setup
+# =====================================================
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # =====================================================
 # Router
 # =====================================================
-
 router = APIRouter(
     prefix="/api",
     tags=["TAYF AI Assistant"]
@@ -19,13 +24,8 @@ router = APIRouter(
 # =====================================================
 # Configuration
 # =====================================================
-
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
-GROQ_MODEL = os.getenv(
-    "GROQ_MODEL",
-    "openai/gpt-oss-120b"
-)
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
 if not GROQ_API_KEY:
     raise RuntimeError(
@@ -33,14 +33,14 @@ if not GROQ_API_KEY:
         "Please add it to your .env file."
     )
 
-client = Groq(
-    api_key=GROQ_API_KEY
-)
-
+client = Groq(api_key=GROQ_API_KEY)
 
 # =====================================================
 # Request / Response Models
 # =====================================================
+class MessageItem(BaseModel):
+    role: str  # "user" or "assistant"
+    content: str
 
 class ChatRequest(BaseModel):
     message: str = Field(
@@ -48,6 +48,10 @@ class ChatRequest(BaseModel):
         min_length=1,
         max_length=4000,
         description="User's question"
+    )
+    history: list[MessageItem] = Field(
+        default=[],
+        description="Previous conversation history"
     )
 
 
@@ -58,7 +62,6 @@ class ChatResponse(BaseModel):
 # =====================================================
 # TAYF System Prompt
 # =====================================================
-
 TAYF_SYSTEM_PROMPT = """
 You are TAYF AI Assistant.
 
@@ -355,7 +358,6 @@ plant data, Computer Vision system, and maintenance intelligence.
 # =====================================================
 # Chat Endpoint
 # =====================================================
-
 @router.post(
     "/chat",
     response_model=ChatResponse
@@ -371,21 +373,24 @@ async def chat(request: ChatRequest):
         )
 
     try:
+        # بناء مصفوفة الرسائل وبدايتها بالـ System Prompt
+        messages = [
+            {
+                "role": "system",
+                "content": TAYF_SYSTEM_PROMPT
+            }
+        ]
+
+        # إضافة السجل السابق (History) إن وجد
+        for msg in request.history:
+            messages.append({"role": msg.role, "content": msg.content})
+
+        # إضافة رسالة المستخدم الجديدة
+        messages.append({"role": "user", "content": message})
 
         completion = client.chat.completions.create(
             model=GROQ_MODEL,
-
-            messages=[
-                {
-                    "role": "system",
-                    "content": TAYF_SYSTEM_PROMPT
-                },
-                {
-                    "role": "user",
-                    "content": message
-                }
-            ],
-
+            messages=messages,
             temperature=0.2,
             max_tokens=1000,
         )
@@ -406,7 +411,9 @@ async def chat(request: ChatRequest):
         raise
 
     except Exception as e:
-     raise HTTPException(
-        status_code=500,
-        detail="TAYF AI Assistant is temporarily unavailable."
-     )
+        # تسجيل الخطأ الفعلي في السيرفر لتسهيل الـ Debugging
+        logger.exception(f"Groq API Error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="TAYF AI Assistant is temporarily unavailable."
+        )
